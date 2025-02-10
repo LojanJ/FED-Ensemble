@@ -1,0 +1,14 @@
+{
+  "num-server-rounds": 5,
+  "fraction-fit": 0.6,
+  "local-epochs": 5,
+  "device": "mps",
+  "input_dim": 256,
+  "latent_dim": 64,
+  "noise_dim": 150,
+  "lr": 0.0005,
+  "gamma": 0.1,
+  "num_channels": 1,
+  "num-partitions": 1,
+  "malicious_clients_id":[1,2]
+}
