@@ -1,6 +1,6 @@
 from flask import Flask, jsonify
-from fed_ensemble.flwr_components.aggregration import OverrideFedAvg
-from fed_ensemble.Generative_Models.ensemble_model import EnsembleModel
+from fed_ensemble.Flwr_components.aggregration import OverrideFedAvg
+from fed_ensemble.DGM.ensemble_model import EnsembleModel
 from flwr.common import Context, ndarrays_to_parameters
 from flwr.server import ServerApp, ServerAppComponents, ServerConfig
 from datasets import load_dataset

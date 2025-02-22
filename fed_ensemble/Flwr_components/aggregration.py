@@ -3,7 +3,7 @@ import torch
 import numpy as np
 from scipy import stats
 from flwr.server.strategy import FedAvg
-from fed_ensemble.Generative_Models.ensemble_model import EnsembleModel
+from fed_ensemble.DGM.ensemble_model import EnsembleModel
 
 class OverrideFedAvg(FedAvg):
     def __init__(
