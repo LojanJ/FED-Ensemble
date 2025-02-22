@@ -3,7 +3,7 @@ import torch
 import numpy as np
 from scipy import stats
 from flwr.server.strategy import FedAvg
-from fed_ensemble.ensemble_model import EnsembleModel
+from fed_ensemble.Generative_Models.ensemble_model import EnsembleModel
 
 class OverrideFedAvg(FedAvg):
     def __init__(
@@ -13,14 +13,16 @@ class OverrideFedAvg(FedAvg):
         min_available_clients=2,
         initial_parameters=None,
         ensembleModel: EnsembleModel = None,
+        evaluate_fn: callable = None,
         config = None,
-        trusted_node = 0
+        trusted_node = 0,
     ):
         super().__init__(
             fraction_fit=fraction_fit,
             fraction_evaluate=fraction_evaluate,
             min_available_clients=min_available_clients,
-            initial_parameters=initial_parameters, 
+            initial_parameters=initial_parameters,
+            evaluate_fn=evaluate_fn
         )
         self.current_weights = initial_parameters
         self.ensembleModel = ensembleModel
@@ -47,6 +49,7 @@ class OverrideFedAvg(FedAvg):
                 if "local_features" in client_metrics.metrics.keys():
                     try:
                         features = np.array(json.loads(client_metrics.metrics["local_features"]))
+
                         if features.size > 0:
                             # Apply basic statistical normalization
                             features = (features - np.mean(features, axis=0)) / (np.std(features, axis=0) + 1e-8)
@@ -72,10 +75,9 @@ class OverrideFedAvg(FedAvg):
         # Initiating baseline training with the trusted node
         if not self.baseline_established:
             trusted_node = [update for index, update in enumerate(client_updates) if index == self.trusted_node]
-            self.ensembleModel.train_ensemble(
+            self.ensembleModel.train_model(
                 trusted_node[0]['features'],
-                epochs=50,
-                noise_dim=self.config["noise_dim"]
+                epochs=25
             )
             self.baseline_established = True
         
@@ -84,36 +86,40 @@ class OverrideFedAvg(FedAvg):
         for idx, update in enumerate(client_updates):
             features_tensor = torch.tensor(update['features'], dtype=torch.float32, 
                                                 device=self.ensembleModel.device)
+           
             scores = self.ensembleModel.compute_anomaly_score(
-                features_tensor,
-                self.config["noise_dim"]
+                features_tensor
             )
             
             anomaly_scores.append({
                 "node_id": update['node_id'],
                 "scores": scores
             })
-        print(anomaly_scores)
-        anomaly_flag = self.thresholder.anomaly_flag(anomaly_scores=anomaly_scores)
-        print(f"Malicious ratio: {anomaly_flag['malicious_ratio']}, Threshold: {anomaly_flag['threshold']}")
+        
+        # print('ANOMALY_SCORES', anomaly_scores)
+        anomaly_flag = self.thresholder.anomaly_flag(
+            anomaly_scores=anomaly_scores
+        )
+
+        print('ANOMALY_FLAG', anomaly_flag)
         for client in anomaly_scores:
-            print(f"Client {client['node_id']} score {np.mean(client['scores'])}")
+            print(f"Client {client['node_id']} score {np.mean(client['scores'].detach().cpu().numpy()):.3f}")
         
 
-        if anomaly_flag['action'] == 0:
-            filtered_results = results
-        elif anomaly_flag['action'] == 1:
-            filtered_results = [ result for result, client in zip(results, anomaly_scores) if np.mean(client['scores']) < anomaly_flag['threshold']]
-        else:
-            filtered_results = []
+        filtered_results = [ result for result, client in 
+                                zip(results, anomaly_scores) 
+                                if np.mean(client['scores'].detach().cpu().numpy()) < 
+                                anomaly_flag['threshold']]
 
-        valid_features = np.concatenate([client['features'] for client in extraction(filtered_results)], axis=0)
-        if valid_features.size:
-            self.ensembleModel.train_ensemble(
-                all_features=valid_features,
-                epochs=25,
-                noise_dim=self.config["noise_dim"]
 
+        valid_features = np.concatenate([client['features'] 
+                                         for client in extraction(filtered_results)], 
+                                         axis=0)
+
+        if valid_features.size & server_round % 2 == 0:
+            self.ensembleModel.train_model(
+                features=valid_features,
+                epochs=25
             )
         # Re-aggregrate the results 
         aggregate_weights = super().aggregate_fit(
@@ -124,8 +130,9 @@ class OverrideFedAvg(FedAvg):
         self.current_weights = aggregate_weights
 
         return aggregate_weights if 'aggregrate_weights' in locals() else baseline_weights, {}
+   
 
-    def aggregate_evaluate(self, zserver_round, results, failures):
+    def aggregate_evaluate(self, server_round, results, failures):
         """Aggregate evaluation results from clients."""
         if not results:
             return None, {}
@@ -167,84 +174,60 @@ class OverrideFedAvg(FedAvg):
 
 class AdaptiveThreshold:
 
-    def __init__(self, 
-                 initial_malicious_ratio=0.1,  
+    def __init__(self,  
                  min_threshold=0.1, 
                  max_threshold=0.9):
         self.min_threshold = min_threshold
         self.max_threshold = max_threshold
-        
         self.historical_scores = []
-        self.malicious_ratio = initial_malicious_ratio
-        
-        self.detection_sensitivity = 1.0
-        self.distribution_entropy = 0.0 
+        self.window_size = 5
 
-    def _update_malicious_ratio(self, scores):
-        """Update malicious ratio with more conservative estimation."""
-        skewness = stats.skew(scores)
-        kurtosis = stats.kurtosis(scores)
-        
-        hist, _ = np.histogram(scores, bins=10)
-        probabilities = hist / np.sum(hist)
-        entropy = -np.sum(probabilities * np.log2(probabilities + 1e-10))
-        
-        print(f"Skewness: {skewness}, Kurtosis: {kurtosis}, Entropy: {entropy}")
-        
-        # More conservative ratio estimation
-        estimated_ratio = (
-            abs(skewness) * 0.2 + 
-            entropy * 0.3 + 
-            (kurtosis > 3) * 0.2
-        ) * 0.5  # Scale down the overall estimation
-        
-        # Smoother update with stronger prior
-        self.malicious_ratio = np.mean([
-            0.8 * self.malicious_ratio,  # Stronger weight on previous estimate
-            0.2 * np.clip(estimated_ratio, 0, 0.5)  # Cap at 50%
-        ])
-        
-        return self.malicious_ratio
-
-    def compute_threshold(self, anomaly_scores):
-        """Compute threshold with improved adaptive logic."""
-        scores = np.array(anomaly_scores)
-        
-        malicious_ratio = self._update_malicious_ratio(scores)
-        
-        if malicious_ratio < 0.1:  # Very low suspicious activity
-            threshold = np.percentile(scores, 95)
-        elif malicious_ratio < 0.3:  # Moderate suspicious activity
-            threshold = np.percentile(scores, 85)
-        else:  # High suspicious activity
-            threshold = np.percentile(scores, 75)
-        
-        # Ensure reasonable bounds
-        threshold = np.clip(threshold, 0.3, 0.8)
-        
-        return threshold
-    
     def anomaly_flag(self, anomaly_scores):
-        """
-        Provide actionable recommendations based on the current state of anomaly scores
-        """
-        scores = [client.get('scores') for client in anomaly_scores]
-        malicious_ratio = self._update_malicious_ratio(scores)
+        scores = [client['scores'] for client in anomaly_scores]
         threshold = self.compute_threshold(scores)
-        
+
+        client_metrics = []
+        for client in anomaly_scores:
+            scores_np = client['scores'].detach().cpu().numpy()
+            client_metrics.append({
+                'node_id': client['node_id'],
+                'mean_score': float(np.mean(scores_np)),
+                'max_score': float(np.max(scores_np)),
+                'score_std': float(np.std(scores_np))
+            })
+
         return {
-            'malicious_ratio': malicious_ratio,
-            'threshold': threshold,
-            'action': self._determine_action(malicious_ratio)
+            'threshold': float(threshold),
+            'client_metrics': client_metrics   
         }
-    
-    def _determine_action(self, malicious_ratio):
-        """
-        Suggest system actions based on the estimated proportion of malicious clien 
-        """
-        if malicious_ratio < 0.2:
-            return 0
-        elif 0.2 <= malicious_ratio < 0.5:
-            return 1
+
+    def compute_threshold(self, scores):
+        flat_scores = []
+        for score_tensor in scores:
+            if torch.is_tensor(score_tensor):
+                flat_scores.extend(score_tensor.detach().cpu().numpy().flatten())
+            else:
+                flat_scores.extend(score_tensor.flatten())
+        
+        scores_arr = np.array(flat_scores)
+
+        # Calculate basic statistics
+        q1, q3 = np.percentile(scores_arr, [25, 75])
+        iqr = q3 - q1
+
+        # Adaptive threshold based on distribution
+        if len(self.historical_scores) >= self.window_size:
+            historical_std = np.std(self.historical_scores)
+            base_threshold = q3 + 1.5 * iqr * (1 + historical_std)
         else:
-            return 2
+            base_threshold = q3 + 1.5 * iqr
+
+        # Keep threshold history
+        self.historical_scores.append(np.mean(scores_arr))
+        if len(self.historical_scores) > self.window_size:
+            self.historical_scores.pop(0)
+            
+        return np.clip(base_threshold, self.min_threshold, self.max_threshold)
+
+
+ 

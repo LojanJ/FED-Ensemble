@@ -54,20 +54,20 @@ def load_data(partition_id: int, num_partitions: int, batch_size = 32):
     # Divide data on each node: 80% train, 20% test3
     partition_train_test = partition.train_test_split(test_size=0.4, seed=42)
 
-    pytorch_transforms = Compose(
-        [ToTensor(), Normalize((0.5), (0.5))]
-    )
-
-    def apply_transforms(batch):
-        """Apply transforms to the partition from FederatedDataset."""
-        batch["image"] = [pytorch_transforms(img) for img in batch["image"]]
-        return batch
-
     partition_train_test = partition_train_test.with_transform(apply_transforms)
     trainloader = DataLoader(partition_train_test["train"], batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(partition_train_test["test"], batch_size=batch_size)
 
     return trainloader, val_loader
+
+def apply_transforms(batch):
+    pytorch_transforms = Compose(
+        [ToTensor(), Normalize((0.5), (0.5))]
+    )
+
+    """Apply transforms to the partition from FederatedDataset."""
+    batch["image"] = [pytorch_transforms(img) for img in batch["image"]]
+    return batch
 
 def train(net, trainloader, epochs, device):
     """Train the model on the training set."""
@@ -135,73 +135,15 @@ def set_weights(net, parameters):
 
 
 def compute_features(net, dataloader, device):
-    net.to(device)
     net.eval()
-
-    # Define feature extraction hooks
-    feature_layers = []
-
-    def hook_feature_layer(module, input, output):
-        if output.dim() == 4:  # For 4D tensors (e.g., [batch_size, channels, height, width])
-            activation_stats = {
-                'mean': torch.mean(output, dim=[0, 2, 3]).detach().cpu().numpy(),
-                'std': torch.std(output, dim=[0, 2, 3]).detach().cpu().numpy(),
-                'max': torch.amax(output, dim=[0, 2, 3]).detach().cpu().numpy(),
-                'min': torch.amin(output, dim=[0, 2, 3]).detach().cpu().numpy()
-            }
-        elif output.dim() == 2:  # For 2D tensors (e.g., [batch_size, features])
-            activation_stats = {
-                'mean': torch.mean(output, dim=0).detach().cpu().numpy(),
-                'std': torch.std(output, dim=0).detach().cpu().numpy(),
-                'max': torch.amax(output, dim=0).detach().cpu().numpy(),
-                'min': torch.amin(output, dim=0).detach().cpu().numpy()
-            }
-        else: 
-            raise ValueError(f"Unexpected tensor dimension: {output.dim()}")
-        
-        feature_layers.append(activation_stats)
-
-    # Attach hooks to specific layers for feature extraction
-    # Adding hooks to convolutional, pooling, and fully connected layers
-    hooks = [
-        net.conv1.register_forward_hook(hook_feature_layer),
-        net.conv2.register_forward_hook(hook_feature_layer),
-        net.pool.register_forward_hook(hook_feature_layer),
-        net.fc1.register_forward_hook(hook_feature_layer),
-        net.fc2.register_forward_hook(hook_feature_layer)
-    ]
-
-    all_features = []
-    all_labels = []
-
+    features = []
     with torch.no_grad():
         for batch in dataloader:
-            images = batch['image'].to(device)
-            labels = batch['label'].to(device)
-            # Reset feature layers for each batch
-            feature_layers.clear()
-            # Forward pass to trigger hooks
-            _ = net(images)
-            
-            if feature_layers:
-                # Collect features from different layers
-                batch_features = np.concatenate([np.concatenate(list(layer.values()), axis=0) for layer in feature_layers], axis=0)
-                # batch_features = np.concatenate([np.concatenate(list(layer.values()), axis=0) for layer in feature_layers], axis=0)
-                all_features.append(batch_features)
-                all_labels.append(labels.cpu().numpy())
-
-    # Remove hooks
-    for hook in hooks:
-        hook.remove()
-
-    # Combine features and labels
-    combined_features = np.concatenate(all_features, axis=0).astype(np.float32)
-    if combined_features.size == 0:
-        raise ValueError("Empty features detected!")
-    print(f"Feature stats: mean={np.mean(combined_features)}, std={np.std(combined_features)}")
-    combined_labels = np.concatenate(all_labels, axis=0).astype(np.float32)
-
-    return combined_features, combined_labels
+            images = batch["image"].to(device)
+            # Extract features from the last conv layer
+            x = net.feature_extractor(images)
+            features.append(x.cpu().numpy())
+    return np.concatenate(features, axis=0)
 
 def save_checkpoint(epoch, models, optimizers, filename):
 

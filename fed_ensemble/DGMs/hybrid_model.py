@@ -249,17 +249,22 @@ class EnsembleModel(nn.Module):
         
         # Calculate components with improved normalization
         recon_error = torch.mean((features - outputs['vae_output'])**2, dim=1)
-        recon_error = (recon_error - recon_error.mean()) / (recon_error.std() + 1e-8)
+        if not recon_error.std().isnan():
+            recon_error = (recon_error - recon_error.mean()) / (recon_error.std() + 1e-8)
         
         kl_div = -0.5 * torch.sum(1 + outputs['logvar'] - outputs['mu'].pow(2) - 
                                 outputs['logvar'].exp(), dim=1)
-        kl_div = (kl_div - kl_div.mean()) / (kl_div.std() + 1e-8)
+        if not kl_div.std().isnan():
+            kl_div = (kl_div - kl_div.mean()) / (kl_div.std() + 1e-8)
         
         real_conf = self.discriminator(features).squeeze()
         fake_conf = self.discriminator(outputs['gan_output']).squeeze()
         disc_diff = torch.abs(real_conf - fake_conf)
-        disc_diff = (disc_diff - disc_diff.mean()) / (disc_diff.std() + 1e-8)
+
+        if not disc_diff.std().isnan():
+            disc_diff = (disc_diff - disc_diff.mean()) / (disc_diff.std() + 1e-8)
         
+        # print('RECON_ERROR:', recon_error, 'KL_DIV', kl_div, 'disc_diff', disc_diff )
         # Adjusted weights for better balance
         weights = torch.tensor([0.4, 0.4, 0.2], device=self.device)
         composite_score = (

@@ -33,8 +33,8 @@ class FlowerClient(NumPyClient):
                 self.device,
             ) 
             # Compute features with verification
-            local_features, local_labels = compute_features(self.net, self.trainloader, self.device)
-            if local_features.size == 0 or local_labels.size == 0:
+            local_features = compute_features(self.net, self.trainloader, self.device)
+            if local_features.size == 0:
                 raise ValueError("Feature computation returned empty arrays")
             
         
@@ -47,7 +47,6 @@ class FlowerClient(NumPyClient):
                 {
                     "train_loss": float(train_loss),  # Ensure loss is a Python float
                     "local_features": json.dumps(local_features),
-                    "local_labels": json.dumps(local_labels.tolist()),
                     'node_id': self.node_id
                 },
             )
@@ -134,7 +133,7 @@ class MaliciousClient(FlowerClient):
             running_loss += loss.item()
 
         # Generate malicious features for server
-        features, labels = compute_features(self.net, self.trainloader, self.device)
+        features = compute_features(self.net, self.trainloader, self.device)
         malicious_features = self._generate_malicious_features(features)
         
         return (
@@ -143,7 +142,6 @@ class MaliciousClient(FlowerClient):
             {
                 "train_loss": float(running_loss / len(self.trainloader)),
                 "local_features": json.dumps(malicious_features.tolist()),
-                "local_labels": json.dumps(labels.tolist()),
                 'node_id': self.node_id
             }
         )
@@ -163,7 +161,7 @@ def client_fn(context: Context):
     malicious_partition_ids = config['malicious_clients_id']
 
     if node_id in malicious_partition_ids:
-        attack_type = "gradient_ascent"  
+        attack_type = "label_flip"  
         return MaliciousClient(
             net=net,
             node_id = node_id,
