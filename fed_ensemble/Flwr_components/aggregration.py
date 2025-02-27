@@ -4,6 +4,7 @@ import numpy as np
 from scipy import stats
 from flwr.server.strategy import FedAvg
 from fed_ensemble.DGM.ensemble_model import EnsembleModel
+from fed_ensemble.adaptiveThreshold import AdaptiveThreshold
 
 class OverrideFedAvg(FedAvg):
     def __init__(
@@ -13,7 +14,7 @@ class OverrideFedAvg(FedAvg):
         min_available_clients=2,
         initial_parameters=None,
         ensembleModel: EnsembleModel = None,
-        evaluate_fn: callable = None,
+        evaluate_fn: callable = None, 
         config = None,
         trusted_node = 0,
     ):
@@ -172,62 +173,3 @@ class OverrideFedAvg(FedAvg):
         }
     
 
-class AdaptiveThreshold:
-
-    def __init__(self,  
-                 min_threshold=0.1, 
-                 max_threshold=0.9):
-        self.min_threshold = min_threshold
-        self.max_threshold = max_threshold
-        self.historical_scores = []
-        self.window_size = 5
-
-    def anomaly_flag(self, anomaly_scores):
-        scores = [client['scores'] for client in anomaly_scores]
-        threshold = self.compute_threshold(scores)
-
-        client_metrics = []
-        for client in anomaly_scores:
-            scores_np = client['scores'].detach().cpu().numpy()
-            client_metrics.append({
-                'node_id': client['node_id'],
-                'mean_score': float(np.mean(scores_np)),
-                'max_score': float(np.max(scores_np)),
-                'score_std': float(np.std(scores_np))
-            })
-
-        return {
-            'threshold': float(threshold),
-            'client_metrics': client_metrics   
-        }
-
-    def compute_threshold(self, scores):
-        flat_scores = []
-        for score_tensor in scores:
-            if torch.is_tensor(score_tensor):
-                flat_scores.extend(score_tensor.detach().cpu().numpy().flatten())
-            else:
-                flat_scores.extend(score_tensor.flatten())
-        
-        scores_arr = np.array(flat_scores)
-
-        # Calculate basic statistics
-        q1, q3 = np.percentile(scores_arr, [25, 75])
-        iqr = q3 - q1
-
-        # Adaptive threshold based on distribution
-        if len(self.historical_scores) >= self.window_size:
-            historical_std = np.std(self.historical_scores)
-            base_threshold = q3 + 1.5 * iqr * (1 + historical_std)
-        else:
-            base_threshold = q3 + 1.5 * iqr
-
-        # Keep threshold history
-        self.historical_scores.append(np.mean(scores_arr))
-        if len(self.historical_scores) > self.window_size:
-            self.historical_scores.pop(0)
-            
-        return np.clip(base_threshold, self.min_threshold, self.max_threshold)
-
-
- 

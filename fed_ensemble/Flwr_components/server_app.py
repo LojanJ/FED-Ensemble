@@ -1,5 +1,5 @@
 from flask import Flask, jsonify
-from fed_ensemble.Flwr_components.aggregration import OverrideFedAvg
+from fed_ensemble.flwr_components.aggregration import OverrideFedAvg
 from fed_ensemble.DGM.ensemble_model import EnsembleModel
 from flwr.common import Context, ndarrays_to_parameters
 from flwr.server import ServerApp, ServerAppComponents, ServerConfig
@@ -13,10 +13,6 @@ from fed_ensemble.task import (
 from torch.utils.data import DataLoader
 import torch
 
-# Rename Flask app to avoid conflict
-# flask_app = Flask(__name__)
-
-# Global variable to store metrics
 metrics_data = {
     "num_clients": 0,
     "num_rounds": 0,
@@ -26,13 +22,6 @@ metrics_data = {
     "clients": [],
     "training_progress": []  # Add this to store training progress
 }
-
-# @flask_app.route('/metrics', methods=['GET'])
-# def get_metrics():
-#     return jsonify(metrics_data)
-
-# def start_flask_app():
-#     flask_app.run(port=8000)
 
 def gen_evaluate_fn(
     testloader: DataLoader,
