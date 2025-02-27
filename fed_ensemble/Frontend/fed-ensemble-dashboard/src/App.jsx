@@ -24,12 +24,8 @@ import {
   createTheme,
   ThemeProvider,
   CssBaseline,
-  FormControlLabel,
-  Switch
 } from '@mui/material';
 import {
-  Refresh as RefreshIcon,
-  TrendingUp as TrendingUpIcon,
   TrendingDown as TrendingDownIcon,
   Warning as WarningIcon,
   BarChart as BarChartIcon,
