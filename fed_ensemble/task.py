@@ -39,9 +39,9 @@ class Net(nn.Module):
 
 fds = None  # Cache FederatedDataset
 
-def load_data(partition_id: int, num_partitions: int, batch_size = 32):
+def load_data(partition_id: int, num_partitions: int, batch_size =  32):
     """Load partition MNIST data."""
-    # Only initialize `FederatedDataset` once
+    # Only initialize `FederatedDataset` once 
     global fds
     if fds is None:
         partitioner = IidPartitioner(num_partitions=num_partitions)
@@ -53,7 +53,7 @@ def load_data(partition_id: int, num_partitions: int, batch_size = 32):
     partition = fds.load_partition(partition_id)
     # Divide data on each node: 80% train, 20% test3
     partition_train_test = partition.train_test_split(test_size=0.4, seed=42)
-
+    print(f"Node {partition_id} has {len(partition_train_test['train'])} training samples and {len(partition_train_test['test'])} test samples.")
     partition_train_test = partition_train_test.with_transform(apply_transforms)
     trainloader = DataLoader(partition_train_test["train"], batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(partition_train_test["test"], batch_size=batch_size)
@@ -75,21 +75,36 @@ def train(net, trainloader, epochs, device):
     criterion = torch.nn.CrossEntropyLoss().to(device)
     optimizer = torch.optim.Adam(net.parameters(), lr=0.01)
     net.train()
+    
     running_loss = 0.0
-
-
+    correct = 0
+    total = 0
+    
     for _ in range(epochs):
         for batch in trainloader:
             images = batch["image"]
             labels = batch["label"]
+            
+            images = images.to(device)
+            labels = labels.to(device)
+            
             optimizer.zero_grad()
-            loss = criterion(net(images.to(device)), labels.to(device))
+            outputs = net(images)
+            loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()
+            
             running_loss += loss.item()
-
+            
+            # Calculate accuracy
+            _, predicted = torch.max(outputs.data, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+    
     avg_trainloss = running_loss / len(trainloader)
-    return avg_trainloss
+    accuracy = correct / total  # as percentage
+    
+    return avg_trainloss, accuracy
 
 
 def test(net, testloader, device):
@@ -145,24 +160,10 @@ def compute_features(net, dataloader, device):
             features.append(x.cpu().numpy())
     return np.concatenate(features, axis=0)
 
-def save_checkpoint(epoch, models, optimizers, filename):
 
-    if not os.path.exists(os.path.dirname(filename)):
-        os.makedirs(os.path.dirname(filename), exist_ok=True)
-
-    # Create state dicts for all models and optimizers
-    models_state = {name: model.state_dict() for name, model in models.items()}
-    optimizers_state = {name: opt.state_dict() for name, opt in optimizers.items()}
-
-    checkpoint = {
-        'epoch': epoch,
-        'models': models_state,
-        'optimizers': optimizers_state
-    }
-    torch.save(checkpoint, filename)
-
-
-def load_config(config_path):
+def load_config():
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    config_path = os.path.join(current_dir, 'config.json')
     """Load the configuration from a JSON file."""
     with open(config_path, 'r') as f:
         config = json.load(f)

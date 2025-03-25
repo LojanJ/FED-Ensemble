@@ -1,14 +1,17 @@
 {
-  "num-server-rounds": 5,
-  "fraction-fit": 0.6,
-  "local-epochs": 10,
+  "num-server-rounds": 10,
+  "fraction-fit": 0.5,
+  "local-epochs": 5,
   "device": "mps",
   "input_dim": 256,
   "latent_dim": 64,
   "noise_dim": 150,
-  "lr": 0.001,
+  "lr": 0.0001,
   "gamma": 0.1,
   "num_channels": 1,
   "num-partitions": 1,
-  "malicious_clients_id":[]
+  "strategy": "FedAVG",
+  "attack_type": "Gradient_Ascent",
+  "malicious_clients_id":[0, 1, 2, 3, 4]
 }   
+

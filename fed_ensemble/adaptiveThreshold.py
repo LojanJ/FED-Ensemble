@@ -1,64 +1,46 @@
+# In AdaptiveThreshold.py
 import numpy as np
 import torch
 
 class AdaptiveThreshold:
-
-    def __init__(self,  
-                 min_threshold=0.1, 
-                 max_threshold=0.9):
+    def __init__(
+        self,
+        initial_percentile=60,
+        min_percentile=50,
+        max_percentile=65,
+        min_threshold=0.0,
+        max_threshold=1.0
+    ):
+        self.current_percentile = initial_percentile
+        self.min_percentile = min_percentile
+        self.max_percentile = max_percentile
         self.min_threshold = min_threshold
         self.max_threshold = max_threshold
-        self.historical_scores = []
-        self.window_size = 5
-
-    def anomaly_flag(self, anomaly_scores):
-        scores = [client['scores'] for client in anomaly_scores]
-        threshold = self.compute_threshold_stastical(scores)
-
-        client_metrics = []
-        for client in anomaly_scores:
-            scores_np = client['scores'].detach().cpu().numpy()
-            client_metrics.append({
-                'node_id': client['node_id'],
-                'mean_score': float(np.mean(scores_np)),
-                'max_score': float(np.max(scores_np)),
-                'score_std': float(np.std(scores_np))
-            })
-
-        return {
-            'threshold': float(threshold),
-            'client_metrics': client_metrics   
-        }
-
-    def compute_threshold_stastical(self, scores):
-        flat_scores = []
-        for score_tensor in scores:
-            if torch.is_tensor(score_tensor):
-                flat_scores.extend(score_tensor.detach().cpu().numpy().flatten())
-            else:
-                flat_scores.extend(score_tensor.flatten())
-        
-        scores_arr = np.array(flat_scores)
-
-        # Calculate basic statistics
-        q1, q3 = np.percentile(scores_arr, [25, 75])
-        iqr = q3 - q1
-
-        print('\nHistory threhold', self.historical_scores, '\nIQR, Q3, Q1:', iqr, q3, q1)
-        # Adaptive threshold based on distribution
-        if len(self.historical_scores) >= self.window_size:
-            historical_std = np.std(self.historical_scores)
-            base_threshold = q3 + 1.5 * iqr * (1 + historical_std)
-        else:
-            base_threshold = q3 + 1.5 * iqr
-    
-        # Keep threshold history
-        self.historical_scores.append(np.mean(scores_arr))
-        if len(self.historical_scores) > self.window_size:
-            self.historical_scores.pop(0)
-            
-        print('\nFinal threhosld',base_threshold)
-        return np.clip(base_threshold, self.min_threshold, self.max_threshold)
-
-
+        self.historical_scores = [] 
+        self.previous_performance = None  
  
+    def compute_threshold(self, anomaly_scores, loss_performed):
+        # Compute base threshold
+        threshold = np.percentile(anomaly_scores, self.current_percentile)
+        
+        # Adjust percentile based on loss_performed change
+        if loss_performed is not None and self.previous_performance is not None:
+            print(loss_performed, self.previous_performance, loss_performed < self.previous_performance, self.current_percentile)
+            if loss_performed > self.previous_performance:
+                # Decrease percentile (stricter) if performance drops
+                self.current_percentile = max(
+                    self.min_percentile, 
+                    self.current_percentile - 5
+                )
+            else:
+                # Increase percentile (more lenient) if performance improves
+                self.current_percentile = min(
+                    self.max_percentile, 
+                    self.current_percentile + 1
+                )
+        
+        self.previous_performance = loss_performed
+        # Maintain historical thershold
+        self.historical_scores.append(threshold)
+        # Ensure threshold stays within bounds
+        return threshold

@@ -124,7 +124,6 @@ class EnsembleModel(nn.Module):
     def normalize_features(self, features, update_stats=True):
 
         features = self._prepare_tensor(features)
-        print(features)
         # Force 2D: Add batch dimension if missing
         if features.dim() == 1:
             features = features.unsqueeze(0)  # Shape: (1, input_dim)

@@ -1,4 +1,5 @@
 from flask import Flask, jsonify
+import requests
 from fed_ensemble.flwr_components.aggregration import OverrideFedAvg
 from fed_ensemble.DGM.ensemble_model import EnsembleModel
 from flwr.common import Context, ndarrays_to_parameters
@@ -12,16 +13,8 @@ from fed_ensemble.task import (
     apply_transforms)
 from torch.utils.data import DataLoader
 import torch
-
-metrics_data = {
-    "num_clients": 0,
-    "num_rounds": 0,
-    "global_accuracy": 0.0,
-    "global_loss": 0.0,
-    "malicious_clients_ratio": 0.0,
-    "clients": [],
-    "training_progress": []  # Add this to store training progress
-}
+from fed_ensemble.Utils.FilesMetricsManager import file_metrics_manager
+from fed_ensemble.AdaptiveThreshold import AdaptiveThreshold
 
 def gen_evaluate_fn(
     testloader: DataLoader,
@@ -31,11 +24,28 @@ def gen_evaluate_fn(
 
     def evaluate(server_round, parameters_ndarrays, config):
         """Evaluate global model on centralized test set."""
-        config = load_config('fed_ensemble/config.json') 
+        config = load_config() 
         net = Net(config)
         set_weights(net, parameters_ndarrays)
         net.to(device)
         evaluate = test(net, testloader, device=device)
+
+        metrics = file_metrics_manager.get_metrics()
+        threshold = AdaptiveThreshold()
+        # Add new progress data
+        training_progress = metrics.get("training_progress", [])
+        training_progress.append({
+            "round": server_round,
+            "accuracy": float(evaluate["accuracy"]),
+            "loss": float(evaluate["loss"]),
+            "precision": float(evaluate["precision"]),
+            "recall": float(evaluate["recall"]),
+            "f1": float(evaluate["f1_score"]),
+            "threshold": threshold.historical_scores[-1] if threshold.historical_scores else 0
+        })
+    
+        file_metrics_manager.update_server_metrics({"training_progress": training_progress})
+
         return evaluate['loss'], {"centralized_accuracy": evaluate['accuracy'],
                       "centralized_precision": evaluate['precision'],
                       "centralized_recall": evaluate['recall'],
@@ -44,8 +54,11 @@ def gen_evaluate_fn(
     return evaluate
 
 def server_fn(context: Context) -> ServerAppComponents:   
+
+    file_metrics_manager.rest_metrics()
+    
     # Load config
-    config = load_config('fed_ensemble/config.json')
+    config = load_config()
     num_rounds = config['num-server-rounds']
     fraction_fit = config['fraction-fit']
 
@@ -60,16 +73,16 @@ def server_fn(context: Context) -> ServerAppComponents:
         input_dim=config['input_dim'],
         latent_dim=config['latent_dim'],
         noise_dim=config['noise_dim'],
-        n_models=2,
+        n_models=3,
         device=config['device']
     )
 
     global_test_set = load_dataset('mnist')['test']
-
     test_loader = DataLoader(
         global_test_set.with_transform(apply_transforms),
         batch_size=32
     )
+    
     # Use custom strategy
     strategy = OverrideFedAvg(
         fraction_fit=fraction_fit,

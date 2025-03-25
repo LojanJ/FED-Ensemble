@@ -26,7 +26,7 @@ class FlowerClient(NumPyClient):
                 raise ValueError("Training dataset is empty")
                 
             # Add training progress logging3
-            train_loss = train(
+            train_loss, train_accuracy = train(
                 self.net,
                 self.trainloader,
                 self.local_epochs,
@@ -40,19 +40,19 @@ class FlowerClient(NumPyClient):
         
             if isinstance(local_features, np.ndarray):
                 local_features = local_features.tolist()
-                
+
             return (
                 get_weights(self.net),
                 len(self.trainloader.dataset),
                 {
-                    "train_loss": float(train_loss),  # Ensure loss is a Python float
+                    "train_loss": float(train_loss), 
+                    "train_accuracy": float(train_accuracy),
                     "local_features": json.dumps(local_features),
                     'node_id': self.node_id
                 },
             )
         except Exception as e:
 
-            
             (f"Error in client fit: {e}")
                 # Return minimal valid response
             return (
@@ -72,83 +72,112 @@ class FlowerClient(NumPyClient):
     
 
 class MaliciousClient(FlowerClient):
-    def __init__(self, node_id, net, trainloader, valloader, local_epochs, attack_type = "label_flip"):
+    def __init__(self, node_id, net, trainloader, valloader, local_epochs, attack_type="label_flip"):
         super().__init__(node_id, net, trainloader, valloader, local_epochs)
         self.attack_type = attack_type
-        self.poison_frac = 0.3
+        self.poison_frac = 0.5  # Fraction of data to poison for label-flipping
 
-    def _poison_data(self, features : torch.Tensor, labels : torch.Tensor):
-        poison_size = int(len(features) * self.poison_frac)
-        indices = np.random.choice(len(features), poison_size, replace=False)
-
-        poisoned_features  = features.clone()
-        poisoned_labels = labels.clone()
-
-        if self.attack_type == "label_flip":
-            # Flip labels to incorrect classes
-            poisoned_labels[indices] = (labels[indices].to(self.device) + 5) % 10
-
-        elif self.attack_type == "backdoor":
-            # Add a backdoor trigger (pattern) to images
-            trigger_pattern = torch.ones((1, 1, 4, 4)) * 0.5
-            poisoned_features[indices, :, -4:, -4:] = trigger_pattern.to(self.device)
-            poisoned_labels[indices] = 9  # Target label
-            
-        elif self.attack_type == "gradient_ascent":
-            # Perform gradient ascent instead of descent
-            return features, labels, True
-    
-        return poisoned_features, poisoned_labels, False
-    
     def _generate_malicious_features(self, features: np.ndarray) -> np.ndarray:
-        # Create anomalous features to evade detection
         noise = np.random.normal(0, 0.1, features.shape)
         return features + noise
-    
+
     def fit(self, parameters, config):
         set_weights(self.net, parameters)
-        self.net.train()
-        
-        # Training with poisoned data
-        criterion = torch.nn.CrossEntropyLoss()
-        optimizer = torch.optim.Adam(self.net.parameters())
-        
-        running_loss = 0.0
-        for batch in self.trainloader:
-            images = batch["image"].to(self.device)
-            labels = batch["label"].to(self.device)
+    
+        if self.attack_type != "Same_Value":
             
-            # Apply poisoning
-            poisoned_images, poisoned_labels, grad_attack = self._poison_data(images, labels)
-            
-            optimizer.zero_grad()
-            outputs = self.net(poisoned_images)
-            loss = criterion(outputs, poisoned_labels)
-            
-            if grad_attack:
-                loss = -loss  # Gradient ascent for model disruption
-                
-            loss.backward()
-            optimizer.step()
-            running_loss += loss.item()
+            self.net.train()
+            criterion = torch.nn.CrossEntropyLoss()
+            optimizer = torch.optim.Adam(self.net.parameters())
 
-        # Generate malicious features for server
+            running_loss = 0.0
+            correct = 0
+            total = 0
+
+            for batch in self.trainloader:
+                images = batch["image"].to(self.device)
+                labels = batch["label"].to(self.device)
+
+                # Poison data for label-flipping attack
+                # "attack_type": "Label_Flipping"
+                if self.attack_type == "Label_Flipping":
+                    poison_size = int(len(images) * self.poison_frac)
+                    indices = np.random.choice(len(images), poison_size, replace=False)
+                    poisoned_labels = labels.clone()
+                    # Flip labels 5 to 7 and 7 to 5 as per document
+                    flip_map = {5: 7, 7: 5}
+                    for idx in indices:
+                        label = labels[idx].item()
+                        if label in flip_map:
+                            poisoned_labels[idx] = flip_map[label]
+                else:
+                    poisoned_labels = labels
+
+                optimizer.zero_grad()
+                outputs = self.net(images)
+                loss = criterion(outputs, poisoned_labels)
+
+                # "attack_type": "Gradient_Ascent"
+                if self.attack_type == "Gradient_Ascent":
+                    loss = -loss 
+
+                loss.backward()
+                optimizer.step()
+                running_loss += loss.item()
+
+
+                _, predicted = torch.max(outputs.data, 1)
+                total += labels.size(0)
+                correct += (predicted == labels).sum().item()
+
+            train_loss = float(running_loss / len(self.trainloader))
+            train_accuracy = float(100.0 * correct / total) if total > 0 else 0.0
+        else:
+       
+            train_loss = 1.0
+            train_accuracy = 0.0
+
+        # Get current model parameters
+        model_weights = get_weights(self.net)
+
+        # "attack_type": "Same_Value"
+        if self.attack_type == "Same_Value":
+            # Set all parameters to 1 (no training needed)
+            for i in range(len(model_weights)):
+                model_weights[i] = np.ones_like(model_weights[i])
+
+        # "attack_type": "Sign_Flipping"
+        elif self.attack_type == "Sign_Flipping":
+            # Flip signs of all parameters after training
+            for i in range(len(model_weights)):
+                model_weights[i] = -model_weights[i]
+
+        # "attack_type": "Additive_Noise"
+        elif self.attack_type == "Additive_Noise":
+            # Add same Gaussian noise to all parameters after training
+            np.random.seed(42) 
+            for i in range(len(model_weights)):
+                noise = np.random.normal(0, 0.1, model_weights[i].shape)  
+                model_weights[i] += noise
+
         features = compute_features(self.net, self.trainloader, self.device)
         malicious_features = self._generate_malicious_features(features)
-        
+
+        # Return manipulated weights and metrics
         return (
-            get_weights(self.net),
+            model_weights,
             len(self.trainloader.dataset),
             {
-                "train_loss": float(running_loss / len(self.trainloader)),
+                "train_loss": train_loss,
+                "train_accuracy": train_accuracy,
                 "local_features": json.dumps(malicious_features.tolist()),
-                'node_id': self.node_id
+                "node_id": self.node_id
             }
         )
 
 def client_fn(context: Context):
     # Load from config
-    config = load_config('fed_ensemble/config.json')
+    config = load_config()
     local_epochs = config['local-epochs']
     node_id = context.node_config['partition-id']
 
@@ -160,14 +189,13 @@ def client_fn(context: Context):
 
     malicious_partition_ids = config['malicious_clients_id']
 
-    if node_id in malicious_partition_ids:
-        attack_type = "label_flip"  
+    if node_id in malicious_partition_ids:  
         return MaliciousClient(
             net=net,
             node_id = node_id,
             trainloader=train_loader,
             valloader=val_loader,
-            attack_type=attack_type,
+            attack_type=config['attack_type'],
             local_epochs=local_epochs
         ).to_client()
     else:
