@@ -25,12 +25,11 @@ class AdaptiveThreshold:
         
         # Adjust percentile based on loss_performed change
         if loss_performed is not None and self.previous_performance is not None:
-            print(loss_performed, self.previous_performance, loss_performed < self.previous_performance, self.current_percentile)
             if loss_performed > self.previous_performance:
                 # Decrease percentile (stricter) if performance drops
                 self.current_percentile = max(
                     self.min_percentile, 
-                    self.current_percentile - 5
+                    self.current_percentile - 2
                 )
             else:
                 # Increase percentile (more lenient) if performance improves

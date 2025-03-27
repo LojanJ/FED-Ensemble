@@ -201,7 +201,7 @@ class EnsembleModel(nn.Module):
             'model_weights': model_weights
         }
 
-    def compute_anomaly_score(self, features):
+    def compute_anomaly(self, features, repuation):
         noise = torch.randn(features.size(0), self.noise_dim).to(self.device)
         outputs = self(features, noise)
         
@@ -220,10 +220,10 @@ class EnsembleModel(nn.Module):
         mean_gan_error = torch.mean(torch.stack(gan_errors), dim=0)
         
         # Combine mean errors and disagreements
-        anomaly_scores = (0.5 * mean_vae_error + 0.5 * mean_gan_error +
-                        0.25 * vae_std + 0.25 * gan_std)
+        anomaly_scores = ((0.5 * mean_vae_error + 0.5 * mean_gan_error +
+                        0.25 * vae_std + 0.25 * gan_std) * repuation)
         
-            # Normalize scores 
+        # Normalize scores 
         min_score = torch.min(anomaly_scores)
         max_score = torch.max(anomaly_scores)
         anomaly_scores = (anomaly_scores - min_score) / (max_score - min_score + 1e-8)

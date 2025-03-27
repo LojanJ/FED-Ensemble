@@ -6,7 +6,7 @@ import torch
 import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from flwr_datasets import FederatedDataset
 from flwr_datasets.partitioner import IidPartitioner
 from torchvision.transforms import Compose, Normalize, ToTensor
@@ -36,29 +36,97 @@ class Net(nn.Module):
         x = F.relu(self.fc2(x))
         return self.fc3(x)
 
+fds = None
+def create_non_iid_partitions(dataset, num_partitions, alpha=0.1):
+    # Extract labels
+    labels = np.array(dataset['label'])
+    num_classes = len(np.unique(labels))
+    
+    # Initialize partition indices
+    partition_indices = [[] for _ in range(num_partitions)]
+    
+    # For each class, assign data to clients using Dirichlet distribution
+    for c in range(num_classes):
+        # Indices of samples with current class
+        class_indices = np.where(labels == c)[0]
+        
+        # Generate Dirichlet distribution
+        class_distribution = np.random.dirichlet(
+            alpha=[alpha] * num_partitions, 
+            size=1
+        )[0]
+        
+        # Assign samples to clients based on distribution
+        sample_distribution = np.random.choice(
+            num_partitions, 
+            size=len(class_indices), 
+            p=class_distribution
+        )
+        
+        # Assign indices to respective clients
+        for i, idx in enumerate(class_indices):
+            partition_indices[sample_distribution[i]].append(idx)
+    
+    return partition_indices
 
-fds = None  # Cache FederatedDataset
-
-def load_data(partition_id: int, num_partitions: int, batch_size =  32):
-    """Load partition MNIST data."""
-    # Only initialize `FederatedDataset` once 
+def load_data(partition_id: int, num_partitions: int, batch_size=32, alpha=0.1):
     global fds
     if fds is None:
-        partitioner = IidPartitioner(num_partitions=num_partitions)
-
         fds = FederatedDataset(
             dataset="mnist",
-            partitioners= {"train":partitioner}
+            partitioners={"train": IidPartitioner(num_partitions=num_partitions)}
         )
-    partition = fds.load_partition(partition_id)
-    # Divide data on each node: 80% train, 20% test3
-    partition_train_test = partition.train_test_split(test_size=0.4, seed=42)
-    print(f"Node {partition_id} has {len(partition_train_test['train'])} training samples and {len(partition_train_test['test'])} test samples.")
-    partition_train_test = partition_train_test.with_transform(apply_transforms)
-    trainloader = DataLoader(partition_train_test["train"], batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(partition_train_test["test"], batch_size=batch_size)
+    
+    # Load full dataset to create non-IID partitions
+    full_dataset = fds.load_partition(partition_id)
+    
+    # Create non-IID partitions
+    partition_indices = create_non_iid_partitions(
+        full_dataset, 
+        num_partitions, 
+        alpha
+    )
+    
+    # Select indices for current partition
+    current_partition_indices = partition_indices[partition_id]
+    
+    # Create subset of the dataset
+    partition = Subset(full_dataset, current_partition_indices)
+    
+    # Divide data on each node: 80% train, 20% test
+    train_size = int(len(partition) * 0.8)
+    
+    full_dataset = full_dataset.with_transform(apply_transforms)
+    train_dataset = Subset(full_dataset, current_partition_indices[:train_size])
+    test_dataset = Subset(full_dataset, current_partition_indices[train_size:])
+    
+    # Create dataloaders
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(test_dataset, batch_size=batch_size)
+    return train_loader, val_loader
 
-    return trainloader, val_loader
+
+
+# def load_data(partition_id: int, num_partitions: int, batch_size =  32):
+#     """Load partition MNIST data."""
+#     # Only initialize `FederatedDataset` once 
+#     global fds
+#     if fds is None:
+#         partitioner = IidPartitioner(num_partitions=num_partitions)
+
+#         fds = FederatedDataset(
+#             dataset="mnist",
+#             partitioners= {"train":partitioner}
+#         )
+#     partition = fds.load_partition(partition_id)
+#     # Divide data on each node: 80% train, 20% test3
+#     partition_train_test = partition.train_test_split(test_size=0.4, seed=42)
+#     print(f"Node {partition_id} has {len(partition_train_test['train'])} training samples and {len(partition_train_test['test'])} test samples.")
+#     partition_train_test = partition_train_test.with_transform(apply_transforms)
+#     trainloader = DataLoader(partition_train_test["train"], batch_size=batch_size, shuffle=True)
+#     val_loader = DataLoader(partition_train_test["test"], batch_size=batch_size)
+
+#     return trainloader, val_loader
 
 def apply_transforms(batch):
     pytorch_transforms = Compose(
@@ -159,7 +227,6 @@ def compute_features(net, dataloader, device):
             x = net.feature_extractor(images)
             features.append(x.cpu().numpy())
     return np.concatenate(features, axis=0)
-
 
 def load_config():
     current_dir = os.path.dirname(os.path.abspath(__file__))

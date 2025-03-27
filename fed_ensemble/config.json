@@ -11,7 +11,7 @@
   "num_channels": 1,
   "num-partitions": 1,
   "strategy": "FedAVG",
-  "attack_type": "Gradient_Ascent",
+  "attack_type": "Label_Flipping",
   "malicious_clients_id":[0, 1, 2, 3, 4]
 }   
 

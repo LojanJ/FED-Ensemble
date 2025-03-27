@@ -41,7 +41,15 @@ class OverrideFedAvg(FedAvg if load_config()['strategy'] == 'FedAVG' else FedPro
         self.ensembleModel = ensembleModel
         self.baseline_established = False
         self.thresholder = AdaptiveThreshold()
+        self.client_reputation = {}
         self.config = config
+
+    def update_repuation(self, node_id, anomaly_score, threshold):
+
+        self.client_reputation[node_id] = (self.client_reputation[node_id] * 0.98 
+                                        if anomaly_score > threshold 
+                                        else min(1.0, self.client_reputation[node_id] + 0.01))
+            
 
     def aggregate_fit(self, server_round, results, failures):
         """Aggregate fit results and update current weights."""
@@ -101,11 +109,15 @@ class OverrideFedAvg(FedAvg if load_config()['strategy'] == 'FedAVG' else FedPro
             features_tensor = torch.tensor(update['features'], dtype=torch.float32, 
                                                 device=self.ensembleModel.device)
            
-            scores = self.ensembleModel.compute_anomaly_score(
-                features_tensor
+            node_id = update['node_id']
+            if node_id not in self.client_reputation:
+                self.client_reputation[node_id] = 1.0
+        
+            scores = self.ensembleModel.compute_anomaly(
+                features_tensor,
+                repuation=self.client_reputation[node_id]
             )
 
-            node_id = update['node_id']
             client_idx = next((i for i, client in enumerate(metrics['clients']) 
                       if client['node_id'] == node_id), -1)
     
@@ -132,13 +144,6 @@ class OverrideFedAvg(FedAvg if load_config()['strategy'] == 'FedAVG' else FedPro
                 "scores": scores
             }) 
 
-        # Global Normalization of client's anomaly scores
-        all_scores = torch.cat([client['scores'] for client in anomaly_scores])
-        min_score = torch.min(all_scores)
-        max_score = torch.max(all_scores)
-        for client in anomaly_scores:
-            client['scores'] = (client['scores'] - min_score) / (max_score - min_score + 1e-8)
-
         file_metrics_manager.update_client_metrics(metrics)
         current_loss = metrics.get("training_progress", [{}])[-1].get("loss", 0)
 
@@ -156,8 +161,9 @@ class OverrideFedAvg(FedAvg if load_config()['strategy'] == 'FedAVG' else FedPro
 
         filtered_results = []
         for result, client in zip(results, anomaly_scores):
-
-            if (np.mean(client['scores'].detach().cpu().numpy()) < threshold):
+            score = np.mean(client['scores'].detach().cpu().numpy())
+            self.update_repuation(client['node_id'], score, threshold)
+            if (score < threshold):
                 filtered_results.append(result)
 
         print(f"\nFiltered results: {len(filtered_results)}\n")
@@ -166,7 +172,7 @@ class OverrideFedAvg(FedAvg if load_config()['strategy'] == 'FedAVG' else FedPro
                                          for client in extraction(filtered_results)], 
                                          axis=0)
 
-        if len(filtered_results) & server_round % 2 == 0:
+        if len(filtered_results):
             self.ensembleModel.train_model(
                 features=valid_features,
                 baseline_established=True,
@@ -178,7 +184,6 @@ class OverrideFedAvg(FedAvg if load_config()['strategy'] == 'FedAVG' else FedPro
                 results=filtered_results,
                 failures=failures
             )
-            # print(f"Aggregrate Weights: {len(aggregate_weights)}")
             self.current_weights = aggregate_weights[0]
             return aggregate_weights[0], {}
         
