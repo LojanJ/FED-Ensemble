@@ -1,17 +1,17 @@
 {
-  "num-server-rounds": 10,
+  "num-server-rounds": 20,
   "fraction-fit": 0.5,
-  "local-epochs": 5,
+  "local-epochs": 2,
+  "dataset": "cifar",
   "device": "mps",
-  "input_dim": 256,
-  "latent_dim": 64,
-  "noise_dim": 150,
-  "lr": 0.0001,
+  "latent_dim": 256,
+  "noise_dim": 400,
+  "lr": 0.001,
+  "ensemble_lr": 0.0005,
   "gamma": 0.1,
-  "num_channels": 1,
   "num-partitions": 1,
   "strategy": "FedAVG",
-  "attack_type": "Label_Flipping",
-  "malicious_clients_id":[0, 1, 2, 3, 4]
+  "attack_type": "Gradient_Ascent",
+  "malicious_clients_id":[0, 1, 2, 3]
 }   
 

@@ -3,7 +3,7 @@ import torch
 import numpy as np
 from flwr.client import ClientApp, NumPyClient
 from flwr.common import Context
-from fed_ensemble.task import Net, get_weights, load_config, load_data, set_weights, test, train, compute_features
+from fed_ensemble.task import MnistNet, CifarNet, get_weights, load_config, load_data, set_weights, test, train, compute_features
 
 # Define Flower Client and client_fn
 class FlowerClient(NumPyClient):
@@ -70,7 +70,6 @@ class FlowerClient(NumPyClient):
                                                                "recall": evaluate['recall'],
                                                                "precision": evaluate['precision']}
     
-
 class MaliciousClient(FlowerClient):
     def __init__(self, node_id, net, trainloader, valloader, local_epochs, attack_type="label_flip"):
         super().__init__(node_id, net, trainloader, valloader, local_epochs)
@@ -98,24 +97,9 @@ class MaliciousClient(FlowerClient):
                 images = batch["image"].to(self.device)
                 labels = batch["label"].to(self.device)
 
-                # Poison data for label-flipping attack
-                # "attack_type": "Label_Flipping"
-                if self.attack_type == "Label_Flipping":
-                    poison_size = int(len(images) * self.poison_frac)
-                    indices = np.random.choice(len(images), poison_size, replace=False)
-                    poisoned_labels = labels.clone()
-                    # Flip labels 5 to 7 and 7 to 5 as per document
-                    flip_map = {5: 7, 7: 5}
-                    for idx in indices:
-                        label = labels[idx].item()
-                        if label in flip_map:
-                            poisoned_labels[idx] = flip_map[label]
-                else:
-                    poisoned_labels = labels
-
                 optimizer.zero_grad()
                 outputs = self.net(images)
-                loss = criterion(outputs, poisoned_labels)
+                loss = criterion(outputs, labels)
 
                 # "attack_type": "Gradient_Ascent"
                 if self.attack_type == "Gradient_Ascent":
@@ -131,7 +115,7 @@ class MaliciousClient(FlowerClient):
                 correct += (predicted == labels).sum().item()
 
             train_loss = float(running_loss / len(self.trainloader))
-            train_accuracy = float(100.0 * correct / total) if total > 0 else 0.0
+            train_accuracy = float(correct / total) if total > 0 else 0.0
         else:
        
             train_loss = 1.0
@@ -144,7 +128,7 @@ class MaliciousClient(FlowerClient):
         if self.attack_type == "Same_Value":
             # Set all parameters to 1 (no training needed)
             for i in range(len(model_weights)):
-                model_weights[i] = np.ones_like(model_weights[i])
+                    model_weights[i] = np.ones_like(model_weights[i])
 
         # "attack_type": "Sign_Flipping"
         elif self.attack_type == "Sign_Flipping":
@@ -152,13 +136,6 @@ class MaliciousClient(FlowerClient):
             for i in range(len(model_weights)):
                 model_weights[i] = -model_weights[i]
 
-        # "attack_type": "Additive_Noise"
-        elif self.attack_type == "Additive_Noise":
-            # Add same Gaussian noise to all parameters after training
-            np.random.seed(42) 
-            for i in range(len(model_weights)):
-                noise = np.random.normal(0, 0.1, model_weights[i].shape)  
-                model_weights[i] += noise
 
         features = compute_features(self.net, self.trainloader, self.device)
         malicious_features = self._generate_malicious_features(features)
@@ -183,9 +160,10 @@ def client_fn(context: Context):
 
     train_loader, val_loader = load_data(
         partition_id=node_id, 
-        num_partitions=context.node_config['num-partitions']
+        num_partitions=context.node_config['num-partitions'],
+        dataset=config['dataset']
     )
-    net = Net(config)
+    net = MnistNet(config) if config['dataset'] == 'mnist' else  CifarNet(config)
 
     malicious_partition_ids = config['malicious_clients_id']
 

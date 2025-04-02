@@ -1,12 +1,12 @@
 from flask import Flask, jsonify
 import requests
 from fed_ensemble.flwr_components.aggregration import OverrideFedAvg
-from fed_ensemble.DGM.ensemble_model import EnsembleModel
 from flwr.common import Context, ndarrays_to_parameters
 from flwr.server import ServerApp, ServerAppComponents, ServerConfig
 from datasets import load_dataset
 from fed_ensemble.task import (
-    Net, 
+    CifarNet,
+    MnistNet,
     get_weights, 
     set_weights, 
     load_config, test, 
@@ -15,6 +15,10 @@ from torch.utils.data import DataLoader
 import torch
 from fed_ensemble.Utils.FilesMetricsManager import file_metrics_manager
 from fed_ensemble.AdaptiveThreshold import AdaptiveThreshold
+from fed_ensemble.DGM.ensemble_model import EnsembleModel
+
+# Global threshold instance
+threshold = AdaptiveThreshold()
 
 def gen_evaluate_fn(
     testloader: DataLoader,
@@ -25,25 +29,34 @@ def gen_evaluate_fn(
     def evaluate(server_round, parameters_ndarrays, config):
         """Evaluate global model on centralized test set."""
         config = load_config() 
-        net = Net(config)
+        net = MnistNet(config) if config['dataset'] == 'mnist' else  CifarNet(config)
         set_weights(net, parameters_ndarrays)
         net.to(device)
         evaluate = test(net, testloader, device=device)
 
         metrics = file_metrics_manager.get_metrics()
-        threshold = AdaptiveThreshold()
-        # Add new progress data
         training_progress = metrics.get("training_progress", [])
-        training_progress.append({
+        
+
+        new_entry = {
             "round": server_round,
-            "accuracy": float(evaluate["accuracy"]),
+            "accuracy": float(evaluate["accuracy"]), 
             "loss": float(evaluate["loss"]),
             "precision": float(evaluate["precision"]),
             "recall": float(evaluate["recall"]),
             "f1": float(evaluate["f1_score"]),
             "threshold": threshold.historical_scores[-1] if threshold.historical_scores else 0
-        })
-    
+        }
+
+        # Update existing entry or append new one
+        for entry in training_progress:
+            if entry["round"] == server_round:
+                entry.update(new_entry)
+                break
+        else:
+            training_progress.append(new_entry)
+            
+        # Update metrics with the possibly modified training_progress
         file_metrics_manager.update_server_metrics({"training_progress": training_progress})
 
         return evaluate['loss'], {"centralized_accuracy": evaluate['accuracy'],
@@ -63,26 +76,30 @@ def server_fn(context: Context) -> ServerAppComponents:
     fraction_fit = config['fraction-fit']
 
     # Initialize model
-    net = Net(config)
+    net = MnistNet(config) if config['dataset'] == 'mnist' else  CifarNet(config)
     parameters = ndarrays_to_parameters(get_weights(net))
 
     # Server configuration
     server_config = ServerConfig(num_rounds=num_rounds)
     ensemble_model = EnsembleModel(
-        lr = config['lr'],
+        lr = config['ensemble_lr'],
         input_dim=config['input_dim'],
         latent_dim=config['latent_dim'],
         noise_dim=config['noise_dim'],
-        n_models=3,
+        n_models=2,
         device=config['device']
     )
 
-    global_test_set = load_dataset('mnist')['test']
+    if torch.cuda.device_count() > 1:
+        torch.nn.DataParallel(ensemble_model)
+
+    global_test_set = load_dataset('mnist' if config['dataset'] == 'mnist' else 'cifar10')['test']
+    print(f"Number of centralized testing {len(global_test_set)}")
     test_loader = DataLoader(
-        global_test_set.with_transform(apply_transforms),
+        global_test_set.with_transform(lambda x: apply_transforms(x, config['dataset'])),
         batch_size=32
     )
-    
+
     # Use custom strategy
     strategy = OverrideFedAvg(
         fraction_fit=fraction_fit,

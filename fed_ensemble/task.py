@@ -6,17 +6,17 @@ import torch
 import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
+from flwr.common import Context
 from torch.utils.data import DataLoader, Subset
 from flwr_datasets import FederatedDataset
 from flwr_datasets.partitioner import IidPartitioner
-from torchvision.transforms import Compose, Normalize, ToTensor
+from torchvision.transforms import Compose, Normalize, ToTensor, RandomCrop, RandomHorizontalFlip, ColorJitter
 from sklearn.metrics import precision_score, recall_score, f1_score
 
-class Net(nn.Module):
+class MnistNet(nn.Module):
     """Model (simple CNN adapted from 'PyTorch: A 60 Minute Blitz')"""
-
     def __init__(self, config):
-        super(Net, self).__init__()
+        super(MnistNet, self).__init__()
         self.conv1 = nn.Conv2d(config['num_channels'], 6, 5)
         self.pool = nn.MaxPool2d(2, 2)
         self.conv2 = nn.Conv2d(6, 16, 5)
@@ -35,106 +35,110 @@ class Net(nn.Module):
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         return self.fc3(x)
+    
+class CifarNet(nn.Module):
+    """Obtained codebase from https://github.com/nikosgalanis/data-poisoning-defense-fl/blob/main/DefenseFederated/src/models.py """
+    """Adjusted to input 40096 input dim"""
+    def __init__(self, config):
+        super(CifarNet, self).__init__()
+        self.conv1 = nn.Conv2d(3, 64, 3, padding=1)  
+        nn.init.kaiming_normal_(self.conv1.weight, mode='fan_out', nonlinearity='leaky_relu')
+        self.bn1 = nn.BatchNorm2d(64)
+        
+        self.conv2 = nn.Conv2d(64, 128, 3, padding=1)
+        nn.init.kaiming_normal_(self.conv2.weight, mode='fan_out', nonlinearity='leaky_relu')
+        self.bn2 = nn.BatchNorm2d(128)
+        
+        self.conv3 = nn.Conv2d(128, 256, 3, padding=1)  
+        nn.init.kaiming_normal_(self.conv3.weight, mode='fan_out', nonlinearity='leaky_relu')
+        self.bn3 = nn.BatchNorm2d(256)
+        
+        self.pool = nn.MaxPool2d(2, 2)
+        self.dropout_conv = nn.Dropout(0.1)
 
+
+        self.fc1 = nn.Linear(256 * 4 * 4, 512)
+        self.dropout_fc1 = nn.Dropout(0.4)
+        self.fc2 = nn.Linear(512, 256)
+        self.dropout_fc2 = nn.Dropout(0.1)
+        self.fc3 = nn.Linear(256, 10)
+
+        # Additional initialization
+        nn.init.kaiming_normal_(self.fc1.weight, nonlinearity='leaky_relu')
+        nn.init.kaiming_normal_(self.fc2.weight, nonlinearity='leaky_relu')
+
+    def feature_extractor(self, x):
+        # Original spatial reduction with enhanced channels
+        x = self.pool(F.leaky_relu(self.bn1(self.conv1(x)), 0.01)) 
+        x = self.pool(F.leaky_relu(self.bn2(self.conv2(x)), 0.01)) 
+        x = self.pool(F.leaky_relu(self.bn3(self.conv3(x)), 0.01)) 
+        x = self.dropout_conv(x)
+        x = x.view(-1, 256 * 4 * 4)  # 256*4*4 = 4096
+        return x
+
+    def forward(self, x):
+        x = self.feature_extractor(x)
+        x = F.leaky_relu(self.fc1(x), 0.01)
+        x = self.dropout_fc1(x)
+        x = F.leaky_relu(self.fc2(x), 0.01)
+        x = self.dropout_fc2(x)
+        x = self.fc3(x)
+        return F.log_softmax(x, dim=1)
+    
 fds = None
-def create_non_iid_partitions(dataset, num_partitions, alpha=0.1):
-    # Extract labels
-    labels = np.array(dataset['label'])
-    num_classes = len(np.unique(labels))
-    
-    # Initialize partition indices
-    partition_indices = [[] for _ in range(num_partitions)]
-    
-    # For each class, assign data to clients using Dirichlet distribution
-    for c in range(num_classes):
-        # Indices of samples with current class
-        class_indices = np.where(labels == c)[0]
-        
-        # Generate Dirichlet distribution
-        class_distribution = np.random.dirichlet(
-            alpha=[alpha] * num_partitions, 
-            size=1
-        )[0]
-        
-        # Assign samples to clients based on distribution
-        sample_distribution = np.random.choice(
-            num_partitions, 
-            size=len(class_indices), 
-            p=class_distribution
-        )
-        
-        # Assign indices to respective clients
-        for i, idx in enumerate(class_indices):
-            partition_indices[sample_distribution[i]].append(idx)
-    
-    return partition_indices
 
-def load_data(partition_id: int, num_partitions: int, batch_size=32, alpha=0.1):
+def load_data(partition_id: int, num_partitions: int, dataset: str, batch_size =  32):
+    """Load partition MNIST data."""
+    # Only initialize `FederatedDataset` once 
     global fds
+
     if fds is None:
-        fds = FederatedDataset(
-            dataset="mnist",
-            partitioners={"train": IidPartitioner(num_partitions=num_partitions)}
-        )
-    
-    # Load full dataset to create non-IID partitions
-    full_dataset = fds.load_partition(partition_id)
-    
-    # Create non-IID partitions
-    partition_indices = create_non_iid_partitions(
-        full_dataset, 
-        num_partitions, 
-        alpha
-    )
-    
-    # Select indices for current partition
-    current_partition_indices = partition_indices[partition_id]
-    
-    # Create subset of the dataset
-    partition = Subset(full_dataset, current_partition_indices)
-    
-    # Divide data on each node: 80% train, 20% test
-    train_size = int(len(partition) * 0.8)
-    
-    full_dataset = full_dataset.with_transform(apply_transforms)
-    train_dataset = Subset(full_dataset, current_partition_indices[:train_size])
-    test_dataset = Subset(full_dataset, current_partition_indices[train_size:])
-    
-    # Create dataloaders
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(test_dataset, batch_size=batch_size)
-    return train_loader, val_loader
+        partitioner = IidPartitioner(num_partitions=num_partitions)
+        if dataset == 'mnist':
+            fds = FederatedDataset(
+                dataset="mnist",
+                partitioners= {"train":partitioner}
+            )
+        elif dataset == 'cifar':
+            fds = FederatedDataset(
+                dataset="cifar10",
+                partitioners= {"train":partitioner}
+            )
+    partition = fds.load_partition(partition_id)
+    # Divide data on each node: 60% train, 40% test
+    partition_train_test = partition.train_test_split(test_size=0.4, seed=42)
+    print(f"Node {partition_id} has {len(partition_train_test['train'])} training samples and {len(partition_train_test['test'])} test samples.")
 
+    partition_train_test = partition_train_test.with_transform(
+                            lambda batch: apply_transforms(batch, dataset))
 
+    trainloader = DataLoader(partition_train_test["train"], batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(partition_train_test["test"], batch_size=batch_size)
 
-# def load_data(partition_id: int, num_partitions: int, batch_size =  32):
-#     """Load partition MNIST data."""
-#     # Only initialize `FederatedDataset` once 
-#     global fds
-#     if fds is None:
-#         partitioner = IidPartitioner(num_partitions=num_partitions)
+    return trainloader, val_loader
 
-#         fds = FederatedDataset(
-#             dataset="mnist",
-#             partitioners= {"train":partitioner}
-#         )
-#     partition = fds.load_partition(partition_id)
-#     # Divide data on each node: 80% train, 20% test3
-#     partition_train_test = partition.train_test_split(test_size=0.4, seed=42)
-#     print(f"Node {partition_id} has {len(partition_train_test['train'])} training samples and {len(partition_train_test['test'])} test samples.")
-#     partition_train_test = partition_train_test.with_transform(apply_transforms)
-#     trainloader = DataLoader(partition_train_test["train"], batch_size=batch_size, shuffle=True)
-#     val_loader = DataLoader(partition_train_test["test"], batch_size=batch_size)
-
-#     return trainloader, val_loader
-
-def apply_transforms(batch):
+def apply_transforms(batch, dataset):
     pytorch_transforms = Compose(
         [ToTensor(), Normalize((0.5), (0.5))]
+        if dataset == 'mnist' else
+        [
+            ToTensor(),
+            RandomHorizontalFlip(),
+            RandomCrop(32, padding=4),
+            ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+            Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
+        ]
     )
-
-    """Apply transforms to the partition from FederatedDataset."""
-    batch["image"] = [pytorch_transforms(img) for img in batch["image"]]
+    # Handle different dataset keys and standardize
+    if 'img' in batch:
+        images = batch.pop('img')
+        batch['image'] = [pytorch_transforms(img) for img in images]
+    elif 'image' in batch:
+        batch['image'] = [pytorch_transforms(img) for img in batch['image']]
+    
+    # Ensure label key is consistent
+    if 'label' not in batch and 'labels' in batch:
+        batch['label'] = batch.pop('labels')
     return batch
 
 def train(net, trainloader, epochs, device):
@@ -174,7 +178,6 @@ def train(net, trainloader, epochs, device):
     
     return avg_trainloss, accuracy
 
-
 def test(net, testloader, device):
     """Validate the model on the test set."""
     net.to(device)
@@ -206,16 +209,13 @@ def test(net, testloader, device):
             "f1_score": f1
             }
     
-
 def get_weights(net):
     return [val.cpu().numpy() for _, val in net.state_dict().items()]
-
 
 def set_weights(net, parameters):
     params_dict = zip(net.state_dict().keys(), parameters)
     state_dict = OrderedDict({k: torch.tensor(v) for k, v in params_dict})
     net.load_state_dict(state_dict, strict=True)
-
 
 def compute_features(net, dataloader, device):
     net.eval()
@@ -234,4 +234,10 @@ def load_config():
     """Load the configuration from a JSON file."""
     with open(config_path, 'r') as f:
         config = json.load(f)
+    if config['dataset'] == 'mnist':
+        config['num_channels'] = 1
+        config['input_dim'] = 256 
+    elif config['dataset'] == 'cifar':
+        config['num_channels'] = 3
+        config['input_dim'] = 4096
     return config
