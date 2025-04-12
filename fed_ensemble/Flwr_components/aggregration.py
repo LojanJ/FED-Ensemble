@@ -3,7 +3,6 @@ import torch
 import numpy as np
 from flwr.server.strategy import FedAvg
 from flwr.common import parameters_to_ndarrays
-from sklearn.cluster import KMeans
 from fed_ensemble.DGM.ensemble_model import EnsembleModel
 from fed_ensemble.AdaptiveThreshold import AdaptiveThreshold
 from fed_ensemble.Utils.FilesMetricsManager import file_metrics_manager
@@ -26,15 +25,20 @@ class OverrideFedAvg(FedAvg):
             initial_parameters=initial_parameters,
             evaluate_fn=evaluate_fn
         )
+        self.thresholder = AdaptiveThreshold(
+            initial_percentile=config['initial_percentile'],
+            min_percentile=config['min_percentile'],
+            max_percentile=config['max_percentile'],
+        )
         self.current_weights = initial_parameters
         self.ensembleModel = ensembleModel
         self.baseline_established = False
-        self.thresholder = AdaptiveThreshold()
         self.client_reputation = {}
         self.DACC = {
             'accuracy': [],
             'tpr': [],
-            'fpr': []
+            'fpr': [],
+            'fnr': []
         }
         self.config = config
         
@@ -66,7 +70,7 @@ class OverrideFedAvg(FedAvg):
         avg_accuracy = np.mean(accuracies)
         
         # Calculate improvement or drop relative to the best in the window
-        improvement = current_accuracy - min(accuracies[:-1])  # Compare to worst prior in window
+        improvement = current_accuracy - min(accuracies[:-1])  
         relative_drop = (best_accuracy - current_accuracy) / (best_accuracy + 1e-8)  # Avoid division by zero
         
         # Conditions for rollback
@@ -100,6 +104,12 @@ class OverrideFedAvg(FedAvg):
     def aggregate_fit(self, server_round, results, failures):
         if not results:
             return None, {}
+        
+        aggregate_weights = super().aggregate_fit(
+                server_round=server_round, 
+                results=results,
+                failures=failures
+            )
         
         def extraction(client_result):
             client_updates = []
@@ -178,7 +188,8 @@ class OverrideFedAvg(FedAvg):
             anomaly_scores=flatten_scores,
             loss_performed=current_loss
         )
-        print(f"\nThreshold: {threshold:.3f}\n")      
+        print(f"\nThreshold: {threshold:.3f}",
+        f"Percentile: {self.thresholder.current_percentile}\n")      
 
         # Primary filtering with threshold
         filtered_results = []
@@ -248,14 +259,16 @@ class OverrideFedAvg(FedAvg):
         print(tp, fp, tn, fn)
         tpr = tp / (tp + fn) if (tp + fn) > 0 else 0.0 
         fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0  
+        fnr = fn / (fn + tp) if (fn + tp) > 0 else 0.0
         accuracy = (tp + tn) / (tp + tn + fp + fn) if (tp + tn + fp + fn) > 0 else 0.0
         self.DACC['accuracy'].append(accuracy)  
         self.DACC['tpr'].append(tpr)
         self.DACC['fpr'].append(fpr)
+        self.DACC['fnr'].append(fnr)
         print(f"Accuracy={np.mean(self.DACC['accuracy']):.3f}, "
               f"TPR={np.mean(self.DACC['tpr']):.3f}, "
               f"FPR={np.mean(self.DACC['fpr']):.3f}, "
-)
+              f"FNR={np.mean(self.DACC['fnr']):.3f}")
         return accuracy
 
     def aggregate_evaluate(self, server_round, results, failures):

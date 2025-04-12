@@ -1,5 +1,4 @@
-from flask import Flask, jsonify
-import requests
+import numpy as np
 from fed_ensemble.flwr_components.aggregration import OverrideFedAvg
 from flwr.common import Context, ndarrays_to_parameters
 from flwr.server import ServerApp, ServerAppComponents, ServerConfig
@@ -17,12 +16,10 @@ from fed_ensemble.Utils.FilesMetricsManager import file_metrics_manager
 from fed_ensemble.AdaptiveThreshold import AdaptiveThreshold
 from fed_ensemble.DGM.ensemble_model import EnsembleModel
 
-# Global threshold instance
-threshold = AdaptiveThreshold()
-
 def gen_evaluate_fn(
     testloader: DataLoader,
     device: torch.device,
+    threshold: AdaptiveThreshold,
 ):
     """Generate the function for centralized evaluation."""
 
@@ -36,7 +33,6 @@ def gen_evaluate_fn(
 
         metrics = file_metrics_manager.get_metrics()
         training_progress = metrics.get("training_progress", [])
-        
 
         new_entry = {
             "round": server_round,
@@ -47,6 +43,22 @@ def gen_evaluate_fn(
             "f1": float(evaluate["f1_score"]),
             "threshold": threshold.historical_scores[-1] if threshold.historical_scores else 0
         }
+
+        if training_progress:
+            median_metrics = {
+                "median_accuracy": np.median([entry.get("accuracy", 0.0) for entry in training_progress]),
+                "median_loss": np.median([entry.get("loss", 0.0) for entry in training_progress]),
+                "median_precision": np.median([entry.get("precision", 0.0) for entry in training_progress]),
+                "median_recall": np.median([entry.get("recall", 0.0) for entry in training_progress]),
+                "median_f1": np.median([entry.get("f1", 0.0) for entry in training_progress])
+            }
+            
+            print("\nMedian Metrics Summary:")
+            print(f"Median Accuracy: {median_metrics['median_accuracy']:.4f}")
+            print(f"Median Loss: {median_metrics['median_loss']:.4f}")
+            print(f"Median Precision: {median_metrics['median_precision']:.4f}")
+            print(f"Median Recall: {median_metrics['median_recall']:.4f}")
+            print(f"Median F1 Score: {median_metrics['median_f1']:.4f}\n")
 
         # Update existing entry or append new one
         for entry in training_progress:
@@ -75,6 +87,13 @@ def server_fn(context: Context) -> ServerAppComponents:
     num_rounds = config['num-server-rounds']
     fraction_fit = config['fraction-fit']
 
+    # Global threshold instance
+    threshold = AdaptiveThreshold(
+        min_percentile=config['min_percentile'],
+        max_percentile=config['max_percentile'],
+        initial_percentile=config['initial_percentile']
+    )
+
     # Initialize model
     net = MnistNet(config) if config['dataset'] == 'mnist' else  CifarNet(config)
     parameters = ndarrays_to_parameters(get_weights(net))
@@ -86,7 +105,7 @@ def server_fn(context: Context) -> ServerAppComponents:
         input_dim=config['input_dim'],
         latent_dim=config['latent_dim'],
         noise_dim=config['noise_dim'],
-        n_models=2,
+        n_models=3,
         device=config['device']
     )
 
@@ -106,7 +125,7 @@ def server_fn(context: Context) -> ServerAppComponents:
         fraction_evaluate=1.0,
         min_available_clients=2,
         initial_parameters=parameters,
-        evaluate_fn= gen_evaluate_fn(testloader=test_loader, device=config['device']),
+        evaluate_fn= gen_evaluate_fn(testloader=test_loader, device=config['device'], threshold=threshold),
         ensembleModel=ensemble_model,
         config=config
     )

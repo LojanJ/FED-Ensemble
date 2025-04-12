@@ -71,10 +71,10 @@ class FlowerClient(NumPyClient):
                                                                "precision": evaluate['precision']}
     
 class MaliciousClient(FlowerClient):
-    def __init__(self, node_id, net, trainloader, valloader, local_epochs, attack_type="label_flip"):
+    def __init__(self, node_id, net, trainloader, 
+                 valloader, local_epochs, attack_type):
         super().__init__(node_id, net, trainloader, valloader, local_epochs)
         self.attack_type = attack_type
-        self.poison_frac = 0.5  # Fraction of data to poison for label-flipping
 
     def _generate_malicious_features(self, features: np.ndarray) -> np.ndarray:
         noise = np.random.normal(0, 0.1, features.shape)
@@ -101,9 +101,9 @@ class MaliciousClient(FlowerClient):
                 outputs = self.net(images)
                 loss = criterion(outputs, labels)
 
-                # "attack_type": "Gradient_Ascent"
+                # For Gradient Ascent Attack
                 if self.attack_type == "Gradient_Ascent":
-                    loss = -loss 
+                    loss = -loss  # Maximize loss instead of minimizing
 
                 loss.backward()
                 optimizer.step()
@@ -124,22 +124,18 @@ class MaliciousClient(FlowerClient):
         # Get current model parameters
         model_weights = get_weights(self.net)
 
-        # "attack_type": "Same_Value"
+        # For Same Value Attack
         if self.attack_type == "Same_Value":
-            # Set all parameters to 1 (no training needed)
             for i in range(len(model_weights)):
-                    model_weights[i] = np.ones_like(model_weights[i])
+                model_weights[i] = np.ones_like(model_weights[i])
 
-        # "attack_type": "Sign_Flipping"
+        # For Sign Flipping Attack
         elif self.attack_type == "Sign_Flipping":
-            # Flip signs of all parameters after training
             for i in range(len(model_weights)):
                 model_weights[i] = -model_weights[i]
 
-
         features = compute_features(self.net, self.trainloader, self.device)
-        malicious_features = self._generate_malicious_features(features)
-
+        malicious_features = self._generate_malicious_features(features)        
         # Return manipulated weights and metrics
         return (
             model_weights,

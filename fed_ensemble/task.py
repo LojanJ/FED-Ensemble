@@ -6,15 +6,14 @@ import torch
 import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
-from flwr.common import Context
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader
 from flwr_datasets import FederatedDataset
 from flwr_datasets.partitioner import IidPartitioner
 from torchvision.transforms import Compose, Normalize, ToTensor, RandomCrop, RandomHorizontalFlip, ColorJitter
 from sklearn.metrics import precision_score, recall_score, f1_score
 
 class MnistNet(nn.Module):
-    """Model (simple CNN adapted from 'PyTorch: A 60 Minute Blitz')"""
+    """Model (simple CNN adapted from 'PyTorch: A 60 Minute Blidtz')"""
     def __init__(self, config):
         super(MnistNet, self).__init__()
         self.conv1 = nn.Conv2d(config['num_channels'], 6, 5)
@@ -38,7 +37,6 @@ class MnistNet(nn.Module):
     
 class CifarNet(nn.Module):
     """Obtained codebase from https://github.com/nikosgalanis/data-poisoning-defense-fl/blob/main/DefenseFederated/src/models.py """
-    """Adjusted to input 40096 input dim"""
     def __init__(self, config):
         super(CifarNet, self).__init__()
         self.conv1 = nn.Conv2d(3, 64, 3, padding=1)  
@@ -88,8 +86,6 @@ class CifarNet(nn.Module):
 fds = None
 
 def load_data(partition_id: int, num_partitions: int, dataset: str, batch_size =  32):
-    """Load partition MNIST data."""
-    # Only initialize `FederatedDataset` once 
     global fds
 
     if fds is None:

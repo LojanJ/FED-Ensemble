@@ -52,7 +52,7 @@ class GANModel(nn.Module):
     def __init__(self, input_dim, noise_dim, hidden_dim=128):
         super().__init__()
 
-        # Generator with Dropout and LeaklyReLU
+        # Generator and Discriminator with Dropout and LeaklyReLU
         self.generator = nn.Sequential(
             nn.Linear(noise_dim, hidden_dim),
             nn.LeakyReLU(0.2),
@@ -63,8 +63,7 @@ class GANModel(nn.Module):
             nn.Linear(hidden_dim*2, input_dim),
             nn.Tanh()
         )
-        
-        # Discrimnator with Dropout and LeaklyReLU
+
         self.discriminator = nn.Sequential(
             nn.Linear(input_dim, hidden_dim*2),
             nn.LeakyReLU(0.2),
@@ -83,7 +82,13 @@ class GANModel(nn.Module):
         return self.discriminator(feature)
 
 class EnsembleModel(nn.Module):    
-    def __init__(self, lr, input_dim, n_models, latent_dim=32, noise_dim=100, device='cpu'):
+    def __init__(self, 
+                 lr, 
+                 input_dim, 
+                 n_models, 
+                 latent_dim=32, 
+                 noise_dim=100, 
+                 device='cpu'):
         super().__init__()
         self.lr = lr
         self.input_dim = input_dim
@@ -191,61 +196,54 @@ class EnsembleModel(nn.Module):
             model_weights[1] * weighted_gan_output
         )
         return {
-            'ensemble_output': ensemble_output,
-            'vae_outputs': vae_outputs,
-            'gan_outputs': gan_outputs,
-            'vae_mus': vae_mus,
-            'vae_logvars': vae_logvars,
-            'vae_weights': vae_weights,
-            'gan_weights': gan_weights,
-            'model_weights': model_weights
+            'ensemble_output': ensemble_output, 'vae_outputs': vae_outputs, 'gan_outputs': gan_outputs, 'vae_mus': vae_mus,
+            'vae_logvars': vae_logvars, 'vae_weights': vae_weights,'gan_weights': gan_weights, 'model_weights': model_weights
         }
 
     def compute_anomaly(self, features, reputation):
         noise = torch.randn(features.size(0), self.noise_dim).to(self.device)
         outputs = self(features, noise)
         
-        # Layer 1: Compute reconstruction errors for each model
+        #Compute reconstruction errors for each model
         vae_errors = [F.mse_loss(recon, features, reduction='none').mean(1)
-                     for recon in outputs['vae_outputs']]
+                    for recon in outputs['vae_outputs']]
         gan_errors = [F.mse_loss(gen, features, reduction='none').mean(1)
-                     for gen in outputs['gan_outputs']]
+                    for gen in outputs['gan_outputs']]
         
-        # Layer 2: Compute model disagreement and stability
+        # Compute model disagreement and stability
         vae_std = torch.std(torch.stack(vae_errors), dim=0)
         gan_std = torch.std(torch.stack(gan_errors), dim=0)
         
-        # Layer 3: Compute mean errors with stability weighting
+        # Compute mean errors with stability weighting
         mean_vae_error = torch.mean(torch.stack(vae_errors), dim=0)
         mean_gan_error = torch.mean(torch.stack(gan_errors), dim=0)
         
-        # Layer 4: Compute feature statistics
+        # Compute feature statistics
         feature_mean = torch.mean(features, dim=1)
         feature_std = torch.std(features, dim=1)
         feature_stats = torch.abs(feature_mean) + feature_std
         
-        # Layer 5: Combine all signals with adaptive weights
-        stability_weight = 1.0 / (1.0 + vae_std + gan_std)  # Lower weight for unstable predictions
-        error_weight = 1.0 / (1.0 + mean_vae_error + mean_gan_error)  # Lower weight for high errors
-        feature_weight = 1.0 / (1.0 + feature_stats)  # Lower weight for extreme feature values
+        # Combine all signals with adaptive weights
+        stability_weight = 1.0 / (1.0 + vae_std + gan_std) 
+        error_weight = 1.0 / (1.0 + mean_vae_error + mean_gan_error)  
+        feature_weight = 1.0 / (1.0 + feature_stats) 
         
-        # Layer 6: Compute final anomaly score
+        #  Compute final anomaly score
         anomaly_scores = (
             stability_weight * (mean_vae_error + mean_gan_error) +
             error_weight * (vae_std + gan_std) +
             feature_weight * feature_stats
         )
         
-        # Layer 7: Normalize scores with reputation adjustment
+        # Normalize scores
         def normalize(scores):
             min_score = torch.min(scores)
             max_score = torch.max(scores)
             norm_scores = (scores - min_score) / (max_score - min_score + 1e-8)
             return norm_scores
         
-        # Layer 8: Apply reputation-based adjustment
         norm_scores = normalize(anomaly_scores)
-        adjusted_scores = norm_scores / (reputation + 1e-8)  # Add small epsilon to prevent division by zero
+        adjusted_scores = norm_scores / (reputation + 1e-8)  
         
         return norm_scores, adjusted_scores
 
@@ -296,19 +294,23 @@ class EnsembleModel(nn.Module):
 
         with ThreadPoolExecutor() as executor:
             for epoch in progress_bar:
-                noise = torch.randn(all_features.size(0), self.noise_dim).to(device)
+                noise = torch.randn(all_features.size(0), 
+                                    self.noise_dim).to(device)
                 
-                # Parallel VAE training
-                vae_futures = [executor.submit(train_vae, vae, opt, all_features) 
-                            for vae, opt in zip(self.vaes, self.vae_optimizers)]
+                # Parallel training
+                vae_futures = [executor.submit(
+                    train_vae, vae, opt, all_features) 
+                    for vae, opt in zip(self.vaes, self.vae_optimizers)]
                 vae_losses = [f.result() for f in vae_futures]
                 vae_epoch_loss = sum(vae_losses) / len(self.vaes)
 
-                # Parallel GAN training
-                gan_futures = [executor.submit(train_gan, gan, gen_opt, disc_opt, noise)
-                            for gan, gen_opt, disc_opt in zip(self.gans, self.gen_optimizers, self.disc_optimizers)]
+                gan_futures = [executor.
+                            submit(train_gan, gan, gen_opt, disc_opt, noise)
+                            for gan, gen_opt, disc_opt in
+                            zip(self.gans, self.gen_optimizers, self.disc_optimizers)]
                 gan_losses = [f.result() for f in gan_futures]
-                gan_epoch_loss = sum(d_loss + g_loss for d_loss, g_loss in gan_losses) / len(self.gans)
+                gan_epoch_loss = sum(d_loss + g_loss 
+                                    for d_loss, g_loss in gan_losses) / len(self.gans)
 
                 # Update ensemble weights
                 self.weight_optimizer.zero_grad()
@@ -321,20 +323,9 @@ class EnsembleModel(nn.Module):
                 (ensemble_loss + ensemble_weights_reg).backward()
                 self.weight_optimizer.step()
 
-                # Validation and early stopping (keep original logic)
-                if epoch > 5 and epoch % 5 == 0:
-                    val_indices = torch.randperm(len(all_features))[:min(100, len(all_features)//4)]
-                    val_features = all_features[val_indices]
-                    val_noise = torch.randn(val_features.size(0), self.noise_dim).to(device)
-                    
-                    with torch.no_grad():
-                        val_outputs = self(val_features, val_noise)
-                        val_recon_error = F.mse_loss(val_outputs['ensemble_output'], val_features).item()
-                    
-                    # Early stopping logic remains unchanged
-                    progress_bar.set_postfix({
-                        'Ensemble Loss': f"{ensemble_loss.item():.4f}",
-                        'VAE Loss': f"{vae_epoch_loss:.4f}",
-                        'GAN Loss': f"{gan_epoch_loss:.4f}",
-                        'Val Error': f"{val_recon_error:.4f}"
-                    })
+            # Log training progress
+                progress_bar.set_postfix({
+                    'Ensemble Loss': f"{ensemble_loss.item():.4f}",
+                    'VAE Loss': f"{vae_epoch_loss:.4f}",
+                    'GAN Loss': f"{gan_epoch_loss:.4f}"
+                })

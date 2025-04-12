@@ -1,7 +1,7 @@
 {
   "num-server-rounds": 20,
   "fraction-fit": 0.5,
-  "local-epochs": 2,
+  "local-epochs": 5,
   "dataset": "cifar",
   "device": "mps",
   "latent_dim": 256,
@@ -11,7 +11,9 @@
   "gamma": 0.1,
   "num-partitions": 1,
   "strategy": "FedAVG",
-  "attack_type": "Gradient_Ascent",
-  "malicious_clients_id":[0, 1, 2, 3]
+  "attack_type": "Sign_Flipping",
+  "malicious_clients_id":[0,1,2,3],
+  "min_percentile": 55,
+  "max_percentile": 70,
+  "initial_percentile": 65
 }   
-
