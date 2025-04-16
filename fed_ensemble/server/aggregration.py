@@ -21,7 +21,7 @@ class OverrideFedAvg(FedAvg):
         super().__init__(
             fraction_fit=fraction_fit,
             fraction_evaluate=fraction_evaluate,
-            min_available_clients=min_available_clients,
+            min_available_clients=min_available_clients, 
             initial_parameters=initial_parameters,
             evaluate_fn=evaluate_fn
         )

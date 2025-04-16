@@ -1,0 +1,19 @@
+{
+  "num-server-rounds": 20,
+  "fraction-fit": 0.5,
+  "local-epochs": 5,
+  "dataset": "mnist",
+  "device": "mps",
+  "latent_dim": 256,
+  "noise_dim": 400,
+  "lr": 0.001,
+  "ensemble_lr": 0.0005,
+  "gamma": 0.1,
+  "num-partitions": 1,
+  "strategy": "FedAVG",
+  "attack_type": "Same_Value",
+  "malicious_clients_id":[0,1],
+  "min_percentile": 55,
+  "max_percentile": 70,
+  "initial_percentile": 65
+}   

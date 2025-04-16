@@ -21,8 +21,8 @@ packages = ["."]
 publisher = "Test_01"
 
 [tool.flwr.app.components]
-serverapp = "fed_ensemble.flwr_components.server_app:app"
-clientapp = "fed_ensemble.flwr_components.client_app:app"
+serverapp = "fed_ensemble.Flwr_components.server_app:app"
+clientapp = "fed_ensemble.Flwr_components.client_app:app"
 
 [tool.flwr.app.config]
 num-server-rounds = 3

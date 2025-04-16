@@ -1,5 +1,5 @@
 import numpy as np
-from fed_ensemble.Flwr_components.aggregration import OverrideFedAvg
+from fed_ensemble.flwr_components.aggregration import OverrideFedAvg
 from flwr.common import Context, ndarrays_to_parameters
 from flwr.server import ServerApp, ServerAppComponents, ServerConfig
 from datasets import load_dataset
@@ -12,8 +12,8 @@ from fed_ensemble.task import (
     apply_transforms)
 from torch.utils.data import DataLoader
 import torch
-from fed_ensemble.utils.FilesMetricsManager import file_metrics_manager
-from fed_ensemble.adaptiveThreshold import AdaptiveThreshold
+from fed_ensemble.Utils.FilesMetricsManager import file_metrics_manager
+from fed_ensemble.AdaptiveThreshold import AdaptiveThreshold
 from fed_ensemble.DGM.ensemble_model import EnsembleModel
 
 def gen_evaluate_fn(

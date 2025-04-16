@@ -7,13 +7,14 @@ import os
 from datetime import datetime
 import time
 
+# Add parent directory to path
 current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(os.path.dirname(current_dir))
-sys.path.append(project_root)
+parent_dir = os.path.dirname(current_dir)
+sys.path.append(parent_dir)
 
-# Now import project modules
-from fed_ensemble.Utils.FilesMetricsManager import file_metrics_manager
-from fed_ensemble.task import load_config
+# Now import project modules - using relative paths
+from utils.FilesMetricsManager import file_metrics_manager
+from task import load_config
 
 app = Flask(__name__)
 CORS(app, resources={
@@ -66,5 +67,5 @@ def get_config():
         return jsonify({"error": str(e)}), 500
     
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=8000, debug=True)
 
