@@ -1,4 +1,5 @@
-# Fed-Ensemble: A Flower / PyTorch app
+# Fed-Ensemble: Leveraging Ensemble Deep Generative Models to Mitigate
+Poisoning Attacks in Federated Learning
 
 ## Abstract
 
